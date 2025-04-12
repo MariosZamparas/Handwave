@@ -16,9 +16,9 @@ import os
 import sys
 
 # Spotify API credentials (use your own from https://developer.spotify.com/dashboard)
-CLIENT_ID = 'd04f33354a724aef88c5335713046cb3'
-CLIENT_SECRET = 'dd7e99a0010442bdb113973b32324615'
-REDIRECT_URI = 'http://localhost:8888/callback'
+CLIENT_ID = os.getenv('SPOTIPY_CLIENT_ID')
+CLIENT_SECRET = os.getenv('SPOTIPY_CLIENT_SECRET')
+REDIRECT_URI = os.getenv('SPOTIPY_REDIRECT_URI')
 
 # Required permissions (scopes) for controlling playback
 SCOPE = 'user-read-private user-read-email playlist-read-private user-modify-playback-state user-read-playback-state'
@@ -78,9 +78,18 @@ class SpotifyApp(tk.Tk):
             messagebox.showerror("Login Failed", str(e))
 
     def logout(self):
-        # Log out: clear token, reset state, and return to landing screen
-        if os.path.exists(".cache"):
-            os.remove(".cache")
+        # Get absolute path to current script's directory
+        app_dir = os.path.dirname(os.path.abspath(__file__))
+
+        # Delete ALL .cache* files in app directory (normal + user-based)
+        for f in os.listdir(app_dir):
+            if f.startswith(".cache"):
+                try:
+                    os.remove(os.path.join(app_dir, f))
+                except Exception as e:
+                    print(f"Could not delete {f}: {e}")
+
+        # Reset session state
         self.sp = None
         self.tracks = []
         self.track_index = 0
