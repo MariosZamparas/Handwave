@@ -200,10 +200,8 @@ class SpotifyApp(QMainWindow):
             if not active_device:
                 QMessageBox.warning(self, "No Device", "Open Spotify on a device.")
                 return
-            if self.is_paused:
-                self.sp.start_playback()
-            else:
-                self.sp.start_playback(device_id=active_device['id'], uris=[uri])
+            
+            self.sp.start_playback(device_id=active_device['id'], uris=[uri])
             self.is_paused = False
         except Exception as e:
             QMessageBox.critical(self, "Playback Error", str(e))
