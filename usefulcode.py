@@ -1,8 +1,11 @@
 #example import of spotipy import
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
+<<<<<<< HEAD
 from time import sleep
 
+=======
+>>>>>>> 1e963115847d6686248f94d09d421bb7520a527d
 
 # Set up Spotify credentials
 sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
