@@ -18,14 +18,25 @@ from dotenv import load_dotenv
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 
-# Load .env environment variables
-load_dotenv()
+# Load environment variables and check for required Spotify credentials
+def get_spotify_credentials():
+    load_dotenv()
 
-CLIENT_ID = os.getenv('SPOTIPY_CLIENT_ID')
-CLIENT_SECRET = os.getenv('SPOTIPY_CLIENT_SECRET')
-REDIRECT_URI = os.getenv('SPOTIPY_REDIRECT_URI')
-SCOPE = 'user-read-private user-read-email playlist-read-private user-modify-playback-state user-read-playback-state'
+    client_id = os.getenv("SPOTIPY_CLIENT_ID")
+    client_secret = os.getenv("SPOTIPY_CLIENT_SECRET")
+    redirect_uri = os.getenv("SPOTIPY_REDIRECT_URI")
 
+    # Check if keys are valid
+    if not all([client_id, client_secret, redirect_uri]):
+        show_error(
+            "Your .env file is incomplete.\nPlease include SPOTIPY_CLIENT_ID, SPOTIPY_CLIENT_SECRET, and SPOTIPY_REDIRECT_URI."
+        )
+        sys.exit(1)
+
+    return client_id, client_secret, redirect_uri
+
+def show_error(message, parent=None):
+    QMessageBox.critical(parent, "Configuration Error", message)
 
 # === GESTURE THREAD ===
 class GestureControlThread(QThread):
@@ -226,11 +237,17 @@ class SpotifyApp(QMainWindow):
 
     def login(self):
         try:
+            client_id, client_secret, redirect_uri = get_spotify_credentials()
+
+            scope = (
+                "user-read-playback-state user-modify-playback-state "
+                "playlist-read-private playlist-read-collaborative"
+            )
             auth_manager = SpotifyOAuth(
-                client_id=CLIENT_ID,
-                client_secret=CLIENT_SECRET,
-                redirect_uri=REDIRECT_URI,
-                scope=SCOPE,
+                client_id=client_id,
+                client_secret=client_secret,
+                redirect_uri=redirect_uri,
+                scope=scope,
                 cache_path=".cache",
                 open_browser=True
             )
@@ -241,8 +258,10 @@ class SpotifyApp(QMainWindow):
             self.logout_btn.setDisabled(False)
             self.login_btn.setDisabled(True)
             self.load_playlists()
+
         except Exception as e:
-            QMessageBox.critical(self, "Login Failed", str(e))
+            show_error(f"Login Failed:\n{str(e)}", parent=self)
+
 
     def logout(self):
         for f in os.listdir(os.path.dirname(os.path.abspath(__file__))):
