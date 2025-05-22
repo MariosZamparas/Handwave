@@ -1,44 +1,51 @@
 # spotify_gui_pyside.py
-import os
-from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QPushButton, QListWidget,
-    QHBoxLayout, QSlider, QMessageBox
-)
-from PySide6.QtGui import QPixmap
-from PySide6.QtCore import Qt, QThread, Signal
 
-import requests
-import io
-import sys
 import os
+import sys
 import time
 import cv2
+import requests
 import mediapipe as mp
 from dotenv import load_dotenv
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 
-# Load environment variables and check for required Spotify credentials
-def get_spotify_credentials():
-    load_dotenv()
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QPushButton,
+    QListWidget, QHBoxLayout, QSlider, QTextEdit
+)
+from PySide6.QtGui import QPixmap
+from PySide6.QtCore import Qt, QThread, Signal
 
+# === Constants ===
+SCOPE = (
+    'user-read-private user-read-email playlist-read-private '
+    'user-modify-playback-state user-read-playback-state'
+)
+
+# === Utility Functions ===
+def show_error(message, console=None):
+    if console:
+        console.append(f"[ERROR] {message}")
+        console.ensureCursorVisible()
+    else:
+        print(f"[ERROR] {message}")
+
+def check_env():
+    if not os.path.isfile('.env'):
+        raise FileNotFoundError("Missing .env file. Please place a valid .env in the app folder.")
+
+    load_dotenv()
     client_id = os.getenv("SPOTIPY_CLIENT_ID")
     client_secret = os.getenv("SPOTIPY_CLIENT_SECRET")
     redirect_uri = os.getenv("SPOTIPY_REDIRECT_URI")
 
-    # Check if keys are valid
     if not all([client_id, client_secret, redirect_uri]):
-        show_error(
-            "Your .env file is incomplete.\nPlease include SPOTIPY_CLIENT_ID, SPOTIPY_CLIENT_SECRET, and SPOTIPY_REDIRECT_URI."
-        )
-        sys.exit(1)
+        raise ValueError("Your .env file is incomplete. Please include SPOTIPY_CLIENT_ID, SPOTIPY_CLIENT_SECRET, and SPOTIPY_REDIRECT_URI.")
 
     return client_id, client_secret, redirect_uri
 
-def show_error(message, parent=None):
-    QMessageBox.critical(parent, "Configuration Error", message)
-
-# === GESTURE THREAD ===
+# === Gesture Recognition Thread ===
 class GestureControlThread(QThread):
     gesture_signal = Signal(str)
 
@@ -47,20 +54,20 @@ class GestureControlThread(QThread):
         self.running = True
         self.last_gesture = None
         self.last_gesture_time = 0
-        self.cooldown = 1.5  # seconds
-
+        self.cooldown = 3
         self.prev_hand_x = None
-        self.prev_hand_y = None  # <-- για vertical gesture
+        self.prev_hand_y = None 
 
         self.mp_hands = mp.solutions.hands
-        self.hands = self.mp_hands.Hands(static_image_mode=False,
-                                         max_num_hands=1,
-                                         min_detection_confidence=0.7,
-                                         min_tracking_confidence=0.7)
+        self.hands = self.mp_hands.Hands(
+            static_image_mode=False,
+            max_num_hands=1,
+            min_detection_confidence=0.7,
+            min_tracking_confidence=0.7
+        )
 
     def run(self):
         cap = cv2.VideoCapture(0)
-
         while self.running:
             success, image = cap.read()
             if not success:
@@ -72,13 +79,15 @@ class GestureControlThread(QThread):
             gesture = None
             if results.multi_hand_landmarks:
                 for hand_landmarks in results.multi_hand_landmarks:
-                    landmarks = hand_landmarks.landmark
-                    gesture = self.detect_gesture(landmarks)
+                    gesture = self.detect_gesture(hand_landmarks.landmark)
                     if gesture:
                         break
 
             current_time = time.time()
-            if gesture and (gesture != self.last_gesture or (current_time - self.last_gesture_time > self.cooldown)):
+            if gesture and (
+                gesture != self.last_gesture or
+                (current_time - self.last_gesture_time > self.cooldown)
+            ):
                 self.last_gesture = gesture
                 self.last_gesture_time = current_time
                 self.gesture_signal.emit(gesture)
@@ -101,10 +110,8 @@ class GestureControlThread(QThread):
         wrist_x = landmarks[0].x
         wrist_y = landmarks[0].y
 
-        direction = None
-        v_direction = None
+        direction, v_direction = None, None
 
-        # Οριζόντια κίνηση
         if self.prev_hand_x is not None:
             dx = wrist_x - self.prev_hand_x
             if dx > 0.05:
@@ -113,7 +120,6 @@ class GestureControlThread(QThread):
                 direction = "left"
         self.prev_hand_x = wrist_x
 
-        # Κάθετη κίνηση
         if self.prev_hand_y is not None:
             dy = wrist_y - self.prev_hand_y
             if dy < -0.05:
@@ -140,25 +146,42 @@ class GestureControlThread(QThread):
         self.quit()
         self.wait()
 
-
-# === SPOTIFY APP GUI ===
+# === Main Spotify GUI ===
 class SpotifyApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Spotify Media Player")
-        self.setGeometry(100, 100, 600, 600)
+        self.setGeometry(100, 100, 600, 700)
 
         self.sp = None
         self.tracks = []
         self.track_index = 0
         self.is_paused = False
 
+        self.init_ui()
+
+        self.gesture_thread = GestureControlThread()
+        self.gesture_thread.gesture_signal.connect(self.handle_gesture)
+        self.gesture_thread.start()
+
+    def init_ui(self):
         self.main_widget = QWidget()
         self.setCentralWidget(self.main_widget)
         self.layout = QVBoxLayout()
 
         self.status_label = QLabel("Not logged in")
         self.layout.addWidget(self.status_label)
+
+        self.console_output = QTextEdit()
+        self.console_output.setReadOnly(True)
+        self.console_output.setStyleSheet("""
+            background-color: #111;
+            color: red;
+            font-family: Consolas, monospace;
+            font-size: 12px;
+        """)
+        self.console_output.setPlaceholderText("Status / error messages will appear here...")
+        self.layout.addWidget(self.console_output)
 
         self.login_btn = QPushButton("Log In with Spotify")
         self.login_btn.clicked.connect(self.login)
@@ -185,21 +208,15 @@ class SpotifyApp(QMainWindow):
         self.layout.addWidget(self.album_art)
 
         control_layout = QHBoxLayout()
-        self.play_btn = QPushButton("Play")
-        self.play_btn.clicked.connect(self.play_track)
-        control_layout.addWidget(self.play_btn)
-
-        self.pause_btn = QPushButton("Pause/Resume")
-        self.pause_btn.clicked.connect(self.toggle_pause)
-        control_layout.addWidget(self.pause_btn)
-
-        self.prev_btn = QPushButton("Prev")
-        self.prev_btn.clicked.connect(self.prev_track)
-        control_layout.addWidget(self.prev_btn)
-
-        self.next_btn = QPushButton("Next")
-        self.next_btn.clicked.connect(self.next_track)
-        control_layout.addWidget(self.next_btn)
+        for text, slot in [
+            ("Play", self.play_track),
+            ("Pause/Resume", self.toggle_pause),
+            ("Prev", self.prev_track),
+            ("Next", self.next_track)
+        ]:
+            btn = QPushButton(text)
+            btn.clicked.connect(slot)
+            control_layout.addWidget(btn)
 
         self.layout.addLayout(control_layout)
 
@@ -212,16 +229,11 @@ class SpotifyApp(QMainWindow):
 
         self.main_widget.setLayout(self.layout)
 
-        self.gesture_thread = GestureControlThread()
-        self.gesture_thread.gesture_signal.connect(self.handle_gesture)
-        self.gesture_thread.start()
-
     def closeEvent(self, event):
         self.gesture_thread.stop()
         event.accept()
 
     def handle_gesture(self, gesture):
-        print(f"Gesture detected: {gesture}")
         if gesture == "play_pause":
             self.toggle_pause()
         elif gesture == "next":
@@ -229,25 +241,18 @@ class SpotifyApp(QMainWindow):
         elif gesture == "prev":
             self.prev_track()
         elif gesture == "volume_up":
-            val = min(self.volume_slider.value() + 10, 100)
-            self.volume_slider.setValue(val)
+            self.volume_slider.setValue(min(self.volume_slider.value() + 10, 100))
         elif gesture == "volume_down":
-            val = max(self.volume_slider.value() - 10, 0)
-            self.volume_slider.setValue(val)
+            self.volume_slider.setValue(max(self.volume_slider.value() - 10, 0))
 
     def login(self):
         try:
-            client_id, client_secret, redirect_uri = get_spotify_credentials()
-
-            scope = (
-                "user-read-playback-state user-modify-playback-state "
-                "playlist-read-private playlist-read-collaborative"
-            )
+            client_id, client_secret, redirect_uri = check_env()
             auth_manager = SpotifyOAuth(
                 client_id=client_id,
                 client_secret=client_secret,
                 redirect_uri=redirect_uri,
-                scope=scope,
+                scope=SCOPE,
                 cache_path=".cache",
                 open_browser=True
             )
@@ -255,13 +260,12 @@ class SpotifyApp(QMainWindow):
             user = self.sp.current_user()
             name = user.get('display_name', 'Unknown')
             self.status_label.setText(f"Logged in as {name}")
-            self.logout_btn.setDisabled(False)
             self.login_btn.setDisabled(True)
+            self.logout_btn.setDisabled(False)
+            self.console_output.append("[INFO] Login successful.")
             self.load_playlists()
-
         except Exception as e:
-            show_error(f"Login Failed:\n{str(e)}", parent=self)
-
+            show_error(f"Login Failed:\n{e}", console=self.console_output)
 
     def logout(self):
         for f in os.listdir(os.path.dirname(os.path.abspath(__file__))):
@@ -279,6 +283,7 @@ class SpotifyApp(QMainWindow):
         self.logout_btn.setDisabled(True)
         self.playlist_list.clear()
         self.track_list.clear()
+        self.console_output.append("[INFO] Logged out.")
 
     def load_playlists(self):
         try:
@@ -288,7 +293,7 @@ class SpotifyApp(QMainWindow):
             for p in self.playlist_data:
                 self.playlist_list.addItem(p['name'])
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Could not load playlists:\n{e}")
+            show_error(f"Could not load playlists:\n{e}", console=self.console_output)
 
     def load_tracks(self, item):
         index = self.playlist_list.row(item)
@@ -300,7 +305,7 @@ class SpotifyApp(QMainWindow):
             for t in self.tracks:
                 self.track_list.addItem(f"{t['name']} - {t['artists'][0]['name']}")
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to load tracks:\n{e}")
+            show_error(f"Failed to load tracks:\n{e}", console=self.console_output)
 
     def select_track(self, item):
         self.track_index = self.track_list.row(item)
@@ -329,58 +334,62 @@ class SpotifyApp(QMainWindow):
             devices = self.sp.devices()
             active_device = next((d for d in devices['devices'] if d['is_active']), None)
             if not active_device:
-                QMessageBox.warning(self, "No Device", "Open Spotify on a device.")
+                show_error("No active device found. Open Spotify on a device.", console=self.console_output)
                 return
             self.sp.start_playback(device_id=active_device['id'], uris=[uri])
             self.is_paused = False
             self.update_track_display()
         except Exception as e:
-            QMessageBox.critical(self, "Playback Error", str(e))
+            show_error(f"Playback Error:\n{e}", console=self.console_output)
 
     def toggle_pause(self):
         try:
-            if self.is_paused:
-                self.sp.start_playback()
-                self.is_paused = False
-            else:
+            playback = self.sp.current_playback()
+            if not playback or not playback.get("device"):
+                show_error("No active device found. Start playback on a Spotify app.", console=self.console_output)
+                return
+            if playback.get("is_playing"):
                 self.sp.pause_playback()
                 self.is_paused = True
+            else:
+                self.sp.start_playback()
+                self.is_paused = False
         except Exception as e:
-            QMessageBox.critical(self, "Pause/Resume Error", str(e))
+            show_error(f"Pause/Resume Error:\n{e}", console=self.console_output)
 
     def set_volume(self, val):
         try:
             self.sp.volume(val)
         except Exception as e:
-            QMessageBox.critical(self, "Volume Error", str(e))
+            show_error(f"Volume Error:\n{e}", console=self.console_output)
 
     def next_track(self):
         try:
-            self.sp.next_track()
             if self.track_index < len(self.tracks) - 1:
-             self.track_index += 1
-             self.update_track_display()
+                self.track_index += 1
+            self.play_track()
         except Exception as e:
-         QMessageBox.critical(self, "Next Track Error", str(e))
+            show_error(f"Next Track Error:\n{e}", console=self.console_output)
 
     def prev_track(self):
+        if self.track_index == 0:
+            return
         try:
-            self.sp.previous_track()
-            if self.track_index > 0:
-             self.track_index -= 1
-            self.update_track_display()
+            self.track_index -= 1
+            self.play_track()
         except Exception as e:
-         QMessageBox.critical(self, "Previous Track Error", str(e))
+            show_error(f"Previous Track Error:\n{e}", console=self.console_output)
 
-
-
-# === ENTRY POINT ===
+# === Entry Point ===
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     window = SpotifyApp()
-script_dir = os.path.dirname(os.path.abspath(__file__))
-style_path = os.path.join(script_dir, "style.qss")
-with open(style_path, "r") as f:
-      app.setStyleSheet(f.read())
-      window.show()
-      sys.exit(app.exec())
+
+    try:
+        with open("style.qss", "r") as f:
+            app.setStyleSheet(f.read())
+    except FileNotFoundError:
+        pass
+
+    window.show()
+    sys.exit(app.exec())
